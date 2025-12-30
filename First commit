@@ -1,0 +1,134 @@
+import numpy as np
+import os
+import cv2
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.neighbors import KNeighborsClassifier
+
+class SimpleNeuralNetScratch:
+    """
+    A Neural Network implementation from scratch using NumPy.
+    Includes Manual Forward Pass, Backpropagation, and Gradient Descent.
+    """
+    def __init__(self, input_dim, num_classes, learning_rate=0.01):
+        # He Initialization for weights (better for ReLU)
+        self.w_fc = np.random.randn(input_dim * input_dim, num_classes) * np.sqrt(2. / (input_dim * input_dim))
+        self.b_fc = np.zeros((1, num_classes))
+        self.lr = learning_rate
+
+    def softmax(self, x):
+        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
+        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
+
+    def forward(self, X):
+        self.X_flat = X.reshape(X.shape[0], -1)
+        self.z = np.dot(self.X_flat, self.w_fc) + self.b_fc
+        self.probs = self.softmax(self.z)
+        return self.probs
+
+    def train_step(self, X, y_true_labels):
+        """
+        Implements the Backpropagation algorithm manually.
+        """
+        batch_size = X.shape[0]
+        
+        # 1. Forward Pass
+        probs = self.forward(X)
+        
+        # 2. Compute Gradient of Loss (Cross-Entropy) with respect to Z
+        # Creating one-hot encoding for the labels
+        y_one_hot = np.zeros_like(probs)
+        y_one_hot[np.arange(batch_size), y_true_labels] = 1
+        
+        dz = (probs - y_one_hot) / batch_size
+        
+        # 3. Compute Gradients for Weights and Biases
+        dw = np.dot(self.X_flat.T, dz)
+        db = np.sum(dz, axis=0, keepdims=True)
+        
+        # 4. Update Weights (Gradient Descent: W = W - lr * dW)
+        self.w_fc -= self.lr * dw
+        self.b_fc -= self.lr * db
+        
+        # Calculate Loss (for monitoring)
+        loss = -np.mean(np.log(probs[np.arange(batch_size), y_true_labels] + 1e-8))
+        return loss
+
+def load_and_preprocess_data(data_dir, img_size=64):
+    if not os.path.exists(data_dir):
+        raise FileNotFoundError(f"The directory {data_dir} does not exist.")
+
+    images = []
+    labels = []
+    all_items = os.listdir(data_dir)
+    class_names = [d for d in all_items if os.path.isdir(os.path.join(data_dir, d))]
+    
+    print(f"Loading data from: {data_dir}")
+    for idx, label in enumerate(class_names):
+        path = os.path.join(data_dir, label)
+        files = [f for f in os.listdir(path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        # Using 100 images per class for efficiency
+        for img_name in files[:100]: 
+            img_path = os.path.join(path, img_name)
+            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                img = cv2.resize(img, (img_size, img_size))
+                images.append(img)
+                labels.append(idx)
+                
+    if len(images) == 0:
+        raise ValueError("Zero images loaded. Please check your dataset path.")
+
+    X = np.array(images) / 255.0 
+    y = np.array(labels)
+    return X, y, class_names
+
+def run_experiment():
+    # --- UPDATE PATH ---
+    data_path = 'C:/Users/hp user/Downloads/plantvillage-dataset/plantvillage dataset/color' 
+    
+    try:
+        X, y, classes = load_and_preprocess_data(data_path, img_size=64)
+        X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
+        X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+        
+        X_train_flat = X_train.reshape(len(X_train), -1)
+        X_test_flat = X_test.reshape(len(X_test), -1)
+
+        print("\n--- Training Baselines ---")
+        # Baseline 1: Logistic (Random Baseline)
+        W_log = np.random.randn(64*64, len(classes)) * 0.01
+        y_pred_log = np.argmax(np.dot(X_test_flat, W_log), axis=1)
+        
+        # Baseline 2: KNN
+        knn = KNeighborsClassifier(n_neighbors=3)
+        knn.fit(X_train_flat, y_train)
+        y_pred_knn = knn.predict(X_test_flat)
+        
+        print("\n--- Training Scratch Model (50 Epochs) ---")
+        model = SimpleNeuralNetScratch(input_dim=64, num_classes=len(classes), learning_rate=0.1)
+        
+        for epoch in range(50):
+            loss = model.train_step(X_train, y_train)
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch}, Loss: {loss:.4f}")
+
+        # Final Evaluation
+        test_probs = model.forward(X_test)
+        final_preds = np.argmax(test_probs, axis=1)
+
+        print("\n" + "="*30)
+        print("      FINAL PROJECT RESULTS")
+        print("="*30)
+        print(f"Baseline 1 (Random/Log) Accuracy: {accuracy_score(y_test, y_pred_log):.4f}")
+        print(f"Baseline 2 (KNN) Accuracy:        {accuracy_score(y_test, y_pred_knn):.4f}")
+        print(f"Scratch Model Accuracy:           {accuracy_score(y_test, final_preds):.4f}")
+        
+        print("\nDetailed Report for Scratch Model:")
+        print(classification_report(y_test, final_preds, target_names=classes))
+
+    except Exception as e:
+        print(f"\nFATAL ERROR: {e}")
+
+if __name__ == "__main__":
+    run_experiment()

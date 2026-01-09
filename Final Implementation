@@ -1,0 +1,149 @@
+import numpy as np
+import os
+import cv2
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+
+class CNNScratch:
+    def __init__(self, num_classes, learning_rate=0.012, l2_lambda=0.002):
+        self.num_filters = 16
+        self.f_size = 3
+        self.filters = np.random.randn(self.num_filters, 3, 3, 3) * np.sqrt(2. / (3 * 3 * 3 + self.num_filters))
+        self.flattened_size = 31 * 31 * self.num_filters
+        self.w1 = np.random.randn(self.flattened_size, 256) * np.sqrt(2. / self.flattened_size)
+        self.b1 = np.zeros((1, 256))
+        self.w2 = np.random.randn(256, num_classes) * np.sqrt(2. / 256)
+        self.b2 = np.zeros((1, num_classes))
+        self.lr = learning_rate
+        self.l2_lambda = l2_lambda
+
+    def relu(self, x): return np.maximum(0, x)
+    def relu_derivative(self, x): return (x > 0).astype(float)
+    def softmax(self, x):
+        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
+        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
+
+    def conv_forward(self, X):
+        self.X_conv = X
+        b, h, w, c = X.shape
+        out_h, out_w = h - self.f_size + 1, w - self.f_size + 1
+        out = np.zeros((b, out_h, out_w, self.num_filters))
+        for i in range(out_h):
+            for j in range(out_w):
+                region = X[:, i:i+self.f_size, j:j+self.f_size, :]
+                for f in range(self.num_filters):
+                    out[:, i, j, f] = np.tensordot(region, self.filters[f], axes=((1,2,3),(0,1,2)))
+        return out
+
+    def maxpool(self, X):
+        b, h, w, c = X.shape
+        out = np.zeros((b, h//2, w//2, c))
+        for i in range(0, h-1, 2):
+            for j in range(0, w-1, 2):
+                out[:, i//2, j//2, :] = np.max(X[:, i:i+2, j:j+2, :], axis=(1, 2))
+        return out
+
+    def forward(self, X):
+        self.z_conv = self.conv_forward(X)
+        self.a_conv = self.relu(self.z_conv)
+        self.pool_out = self.maxpool(self.a_conv)
+        self.a0 = self.pool_out.reshape(X.shape[0], -1)
+        self.z1 = np.dot(self.a0, self.w1) + self.b1
+        self.a1 = self.relu(self.z1)
+        self.z2 = np.dot(self.a1, self.w2) + self.b2
+        self.probs = self.softmax(self.z2)
+        return self.probs
+
+    def train_step(self, X_batch, y_batch):
+        batch_size = X_batch.shape[0]
+        if np.random.rand() > 0.5: X_batch = X_batch[:, :, ::-1, :]
+        probs = self.forward(X_batch)
+        y_one_hot = np.zeros_like(probs); y_one_hot[np.arange(batch_size), y_batch] = 1
+        dz2 = (probs - y_one_hot) / batch_size
+        dw2 = np.dot(self.a1.T, dz2) + (self.l2_lambda * self.w2)
+        db2 = np.sum(dz2, axis=0, keepdims=True)
+        da1 = np.dot(dz2, self.w2.T)
+        dz1 = da1 * self.relu_derivative(self.z1)
+        dw1 = np.dot(self.a0.T, dz1) + (self.l2_lambda * self.w1)
+        db1 = np.sum(dz1, axis=0, keepdims=True)
+        da0 = np.dot(dz1, self.w1.T)
+        d_pool = da0.reshape(self.pool_out.shape)
+        d_conv = np.repeat(np.repeat(d_pool, 2, axis=1), 2, axis=2)[:, :self.a_conv.shape[1], :self.a_conv.shape[2], :]
+        d_z_conv = d_conv * self.relu_derivative(self.z_conv)
+        d_filters = np.zeros_like(self.filters)
+        for i in range(self.f_size):
+            for j in range(self.f_size):
+                region = self.X_conv[:, i:i+d_z_conv.shape[1], j:j+d_z_conv.shape[2], :]
+                for f in range(self.num_filters):
+                    d_filters[f] += np.sum(region * d_z_conv[:, :, :, f:f+1], axis=(0, 1, 2))
+        d_filters += self.l2_lambda * self.filters
+        self.w2 -= self.lr * dw2; self.b2 -= self.lr * db2
+        self.w1 -= self.lr * dw1; self.b1 -= self.lr * db1
+        self.filters -= self.lr * d_filters
+        return -np.mean(np.log(probs[np.arange(batch_size), y_batch] + 1e-8))
+
+def load_and_preprocess_data(data_dir, img_size=64):
+    images, labels = [], []
+    class_names = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+    for idx, label in enumerate(class_names):
+        path = os.path.join(data_dir, label)
+        files = [f for f in os.listdir(path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        for img_name in files[:100]: 
+            img = cv2.imread(os.path.join(path, img_name))
+            if img is not None:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                images.append(cv2.resize(img, (img_size, img_size)))
+                labels.append(idx)
+    return np.array(images) / 255.0, np.array(labels), class_names
+
+def run_experiment():
+    data_path = 'C:/Users/hp user/Downloads/plantvillage-dataset/plantvillage dataset/color' 
+    try:
+        X, y, classes = load_and_preprocess_data(data_path, img_size=64)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
+        model = CNNScratch(num_classes=len(classes))
+        
+        # --- NEW: LISTS TO STORE HISTORY ---
+        all_epoch_losses = []
+        all_acc_history = []
+        
+        batch_size = 32
+        epochs = 70
+        for epoch in range(epochs):
+            indices = np.random.permutation(len(X_train))
+            X_shuff, y_shuff = X_train[indices], y_train[indices]
+            epoch_loss = 0
+            for i in range(0, len(X_train), batch_size):
+                xb, yb = X_shuff[i:i+batch_size], y_shuff[i:i+batch_size]
+                epoch_loss += model.train_step(xb, yb)
+            
+            avg_loss = epoch_loss / (len(X_train)/batch_size)
+            all_epoch_losses.append(avg_loss) # SAVE LOSS
+            
+            # Track accuracy per epoch
+            current_preds = np.argmax(model.forward(X_test), axis=1)
+            current_acc = accuracy_score(y_test, current_preds)
+            all_acc_history.append(current_acc) # SAVE ACCURACY
+            
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch}, Loss: {avg_loss:.4f}, Acc: {current_acc:.4f}")
+            if epoch in [40, 60]: model.lr *= 0.4
+
+        final_preds = np.argmax(model.forward(X_test), axis=1)
+        print(f"\nFinal Accuracy: {accuracy_score(y_test, final_preds):.4f}")
+
+        # --- SAVE ACTUAL DATA FOR VISUALIZATION ---
+        np.savez('model_results.npz', 
+                 loss=np.array(all_epoch_losses),
+                 accuracy=np.array(all_acc_history),
+                 y_test=y_test, 
+                 y_pred=final_preds, 
+                 X_test=X_test[:10], 
+                 classes=np.array(classes))
+        print("Data successfully saved to model_results.npz")
+
+    except Exception as e:
+        print(f"\nERROR: {e}")
+
+if __name__ == "__main__":
+    run_experiment()
